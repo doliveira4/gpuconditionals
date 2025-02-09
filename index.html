@@ -3,29 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <title>GPU Conditionals Benchmark – snap45 Comparison</title>
-  <!-- Ace Editor (from CDN) for syntax highlighting -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js" integrity="sha512-oRz6wK1oP5w8XaxJPmJYr++4jvtphKwLEdi+EbtxmH7cWFUhy9bWlL4RcpXqL7kBUHd21SkB98uP3imW6v9EXg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
-    /* Ensure full viewport height */
+    /* Reset and layout */
     html, body {
       margin: 0;
       padding: 0;
-      height: 100vh;
+      height: 100%;
       font-family: sans-serif;
       background: #111;
       color: #ddd;
     }
-    /* Use flex layout so that header, main and footer are always visible */
-    body {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
     /* Top control bar */
     #controls {
-      flex: 0 0 50px;
-      background-color: #222;
       padding: 10px;
+      background-color: #222;
       display: flex;
       align-items: center;
     }
@@ -33,12 +24,11 @@
     #controls input {
       margin-right: 10px;
     }
-    /* Main container for the two panels */
+    /* Container for the two panels */
     #container {
-      flex: 1;
       display: flex;
       flex-wrap: wrap;
-      overflow: auto;
+      height: calc(100% - 50px);
     }
     .panel {
       flex: 1 1 50%;
@@ -47,18 +37,23 @@
       border: 1px solid #444;
       display: flex;
       flex-direction: column;
-      min-width: 300px;
     }
     .panel h2 {
       margin: 0 0 5px;
       font-size: 1.1em;
     }
-    /* Ace Editor container styling */
-    .editor {
+    .panel textarea {
       width: 100%;
-      height: 200px;
-      border: 1px solid #555;
+      box-sizing: border-box;
+      font-family: monospace;
+      font-size: 0.9em;
       margin-bottom: 5px;
+      resize: vertical;
+      height: 200px;
+      background: #222;
+      color: #ddd;
+      border: 1px solid #555;
+      padding: 5px;
     }
     .panel button {
       margin-bottom: 5px;
@@ -76,77 +71,59 @@
       width: 100%;
       background-color: #000;
       border: 1px solid #444;
-      margin-top: 5px;
     }
     .metrics {
       margin-top: 5px;
       font-size: 0.9em;
     }
-    /* Footer: a dedicated bottom bar for Buy Me A Coffee */
-    #footer {
-      flex: 0 0 60px;
-      background-color: #222;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-    #footer a img {
-      height: 60px;
-      width: auto;
-    }
   </style>
 </head>
 <body>
-  <!-- Top control bar -->
+  <!-- Shared control: adjust the threshold factor -->
   <div id="controls">
     <label for="thresholdSlider">Threshold:</label>
     <input type="range" id="thresholdSlider" min="0.1" max="2.0" step="0.01" value="1.0">
     <span id="thresholdValue">1.00</span>
   </div>
 
-  <!-- Main container with two panels -->
+  <!-- Two panels: one per shader strategy -->
   <div id="container">
     <!-- Branching version panel -->
     <div class="panel">
       <h2>Branching Shader (if/else)</h2>
-      <div id="branchEditor" class="editor"></div>
+      <textarea id="branchEditor"></textarea>
       <button id="compileBranch">Compile Branching Shader</button>
       <canvas id="branchCanvas"></canvas>
       <div class="metrics" id="branchMetrics">Frame Time: N/A</div>
     </div>
+
     <!-- Branchless version panel -->
     <div class="panel">
       <h2>Branchless Shader (step + mix)</h2>
-      <div id="branchlessEditor" class="editor"></div>
+      <textarea id="branchlessEditor"></textarea>
       <button id="compileBranchless">Compile Branchless Shader</button>
       <canvas id="branchlessCanvas"></canvas>
       <div class="metrics" id="branchlessMetrics">Frame Time: N/A</div>
     </div>
   </div>
 
-  <!-- Footer with Buy Me A Coffee button -->
-  <div id="footer">
-    <a href="https://buymeacoffee.com/doliveira4" target="_blank">
-      <img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee">
-    </a>
-  </div>
-
-  <!-- Main Script -->
+  <!-- Main Script: sets up WebGPU, pipelines, UI, and render loops -->
   <script type="module">
-    document.addEventListener("DOMContentLoaded", async () => {
-      // Check for WebGPU support.
-      if (!navigator.gpu) {
-        alert("WebGPU is not supported in this browser.");
-        console.error("WebGPU not supported");
-        return;
-      }
-      
+    // Ensure the browser supports WebGPU.
+    if (!navigator.gpu) {
+      alert("WebGPU is not supported in this browser.");
+      throw new Error("WebGPU not supported");
+    }
+
+    // Top-level async initialization.
+    (async () => {
       // Request adapter and device.
       const adapter = await navigator.gpu.requestAdapter();
       const device = await adapter.requestDevice();
-      console.log("WebGPU device acquired.");
 
       // --- Default WGSL Code for Each Strategy ---
+      // The uniform struct holds: vec2 resolution, float time, float threshold.
+      // The "snap45" function is implemented in two different ways.
       const defaultBranchWGSL = `// Branching shader (if/else) version of snap45
 struct Uniforms {
   resolution: vec2<f32>,
@@ -192,6 +169,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
   let uv = in.fragUV;
   let v = uv * 2.0 - vec2<f32>(1.0, 1.0);
   let result = snap45(v);
+  // Map result from [-1,1] to [0,1] for visualization.
   let color = vec3<f32>(result.x * 0.5 + 0.5, result.y * 0.5 + 0.5, 0.0);
   return vec4<f32>(color, 1.0);
 }
@@ -247,24 +225,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 `;
 
-      // --- Initialize Ace Editors for Syntax Highlighting ---
-      const branchEditor = ace.edit("branchEditor");
-      branchEditor.setTheme("ace/theme/monokai");
-      branchEditor.session.setMode("ace/mode/glsl");
-      branchEditor.setValue(defaultBranchWGSL, -1); // -1 moves the cursor to the beginning
-
-      const branchlessEditor = ace.edit("branchlessEditor");
-      branchlessEditor.setTheme("ace/theme/monokai");
-      branchlessEditor.session.setMode("ace/mode/glsl");
-      branchlessEditor.setValue(defaultBranchlessWGSL, -1);
+      // Set the default WGSL code in each editor.
+      document.getElementById("branchEditor").value = defaultBranchWGSL;
+      document.getElementById("branchlessEditor").value = defaultBranchlessWGSL;
 
       // --- Canvas and Context Setup ---
       const branchCanvas = document.getElementById("branchCanvas");
       const branchlessCanvas = document.getElementById("branchlessCanvas");
 
+      // Helper to initialize a canvas with a WebGPU context.
       function initCanvas(canvas) {
         const context = canvas.getContext("webgpu");
-        // Set the drawing buffer size based on CSS dimensions.
+        // Ensure the drawing buffer is set from CSS size.
         canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
         canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -279,7 +251,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const branchlessSetup = initCanvas(branchlessCanvas);
 
       // --- Uniform Buffer and Bind Groups ---
-      const uniformBufferSize = 4 * 4; // 4 floats (vec2 + float + float)
+      // Uniforms: 4 floats (vec2 resolution, time, threshold) = 16 bytes.
+      const uniformBufferSize = 4 * 4;
       function createUniformBuffer() {
         return device.createBuffer({
           size: uniformBufferSize,
@@ -289,6 +262,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const branchUniformBuffer = createUniformBuffer();
       const branchlessUniformBuffer = createUniformBuffer();
 
+      // Bind group layout: one uniform buffer at binding 0.
       const bindGroupLayout = device.createBindGroupLayout({
         entries: [{
           binding: 0,
@@ -299,6 +273,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const pipelineLayout = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayout]
       });
+      // Helper to create a bind group.
       function createBindGroup(uniformBuffer) {
         return device.createBindGroup({
           layout: bindGroupLayout,
@@ -312,6 +287,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       let branchlessBindGroup = createBindGroup(branchlessUniformBuffer);
 
       // --- Pipeline Creation ---
+      // Given full WGSL code (vertex + fragment), create a render pipeline.
       function createPipeline(shaderCode, presentationFormat) {
         const shaderModule = device.createShaderModule({ code: shaderCode });
         try {
@@ -334,11 +310,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
           return null;
         }
       }
+      // Create the initial pipelines from the default WGSL code.
       let branchPipeline = createPipeline(defaultBranchWGSL, branchSetup.presentationFormat);
       let branchlessPipeline = createPipeline(defaultBranchlessWGSL, branchlessSetup.presentationFormat);
-      if (!branchPipeline || !branchlessPipeline) {
-        console.error("One or both pipelines failed to compile.");
-      }
 
       // --- Shared Parameter: Threshold ---
       const thresholdSlider = document.getElementById("thresholdSlider");
@@ -371,6 +345,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         branchFrameTimes.push(delta);
         if (branchFrameTimes.length > 100) branchFrameTimes.shift();
         updateMetrics(branchMetricsEl, branchFrameTimes);
+        // Update uniform buffer: [width, height, time, threshold]
         const uniformData = new Float32Array([
           branchCanvas.width,
           branchCanvas.height,
@@ -378,6 +353,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
           currentThreshold
         ]);
         device.queue.writeBuffer(branchUniformBuffer, 0, uniformData.buffer);
+        // Begin rendering.
         const commandEncoder = device.createCommandEncoder();
         const textureView = branchSetup.context.getCurrentTexture().createView();
         const renderPass = commandEncoder.beginRenderPass({
@@ -405,6 +381,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         branchlessFrameTimes.push(delta);
         if (branchlessFrameTimes.length > 100) branchlessFrameTimes.shift();
         updateMetrics(branchlessMetricsEl, branchlessFrameTimes);
+        // Update uniform buffer.
         const uniformData = new Float32Array([
           branchlessCanvas.width,
           branchlessCanvas.height,
@@ -412,6 +389,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
           currentThreshold
         ]);
         device.queue.writeBuffer(branchlessUniformBuffer, 0, uniformData.buffer);
+        // Render.
         const commandEncoder = device.createCommandEncoder();
         const textureView = branchlessSetup.context.getCurrentTexture().createView();
         const renderPass = commandEncoder.beginRenderPass({
@@ -430,13 +408,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         requestAnimationFrame(renderBranchless);
       }
 
-      // Start the render loops.
+      // Start both render loops.
       renderBranch();
       renderBranchless();
 
       // --- Recompile on Demand ---
       document.getElementById("compileBranch").addEventListener("click", () => {
-        const code = branchEditor.getValue();
+        const code = document.getElementById("branchEditor").value;
         const newPipeline = createPipeline(code, branchSetup.presentationFormat);
         if (newPipeline) {
           branchPipeline = newPipeline;
@@ -446,7 +424,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
       });
       document.getElementById("compileBranchless").addEventListener("click", () => {
-        const code = branchlessEditor.getValue();
+        const code = document.getElementById("branchlessEditor").value;
         const newPipeline = createPipeline(code, branchlessSetup.presentationFormat);
         if (newPipeline) {
           branchlessPipeline = newPipeline;
@@ -456,14 +434,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
       });
 
-      // Handle window resize.
+      // --- Handle Window Resize ---
       window.addEventListener("resize", () => {
         [branchCanvas, branchlessCanvas].forEach(canvas => {
           canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
           canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
         });
       });
-    });
+    })();
   </script>
 </body>
 </html>
