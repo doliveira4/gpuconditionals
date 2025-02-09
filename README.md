@@ -5,6 +5,10 @@
 
 Experimental implementation comparing GPU conditional evaluation strategies, based on [Íñigo Quílez's analysis](https://iquilezles.org/articles/gpuconditionals/).
 
+## Live Demo
+A hosted version is available at:  
+[https://doliveira4.github.io/gpuconditionals/](https://doliveira4.github.io/gpuconditionals/)
+
 ## Key Features
 - Branching (`if/else`) vs branchless (`step/mix`) implementations
 - Real-time threshold control with animated feedback
