@@ -1,39 +1,40 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>GPU Conditional Evaluation Study</title>
     <style>
-        /* Visualization canvas styling */
-        #mainCanvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
+        body {
+            background: #000;
+            color: #fff;
+            margin: 0;
+            overflow: hidden;
+            font-family: monospace;
         }
         
-        /* Control panel styling */
-        .controls {
-            position: fixed;
+        #controls {
+            position: absolute;
             top: 20px;
             left: 20px;
-            background: rgba(255, 255, 255, 0.9);
+            background: rgba(0, 0, 0, 0.7);
             padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 5px;
+            border: 1px solid #444;
+        }
+        
+        pre {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 600px;
+            overflow-x: auto;
         }
     </style>
 </head>
 <body>
-    <!-- Main rendering surface -->
     <canvas id="mainCanvas"></canvas>
     
-    <!-- Interactive controls -->
-    <div class="controls">
-        <!-- Conditional type selector -->
+    <div id="controls">
         <div>
-            <label>Evaluation Strategy:
+            <label>Conditional Type:
                 <select id="conditionalType">
                     <option value="0">Branching (if/else)</option>
                     <option value="1">Branchless (math)</option>
@@ -41,39 +42,157 @@
             </label>
         </div>
         
-        <!-- Threshold control -->
         <div>
-            <label>Decision Boundary: 
+            <label>Threshold: 
                 <input type="range" id="threshold" 
                        min="0" max="1" step="0.01" value="0.5">
             </label>
         </div>
+        
+        <div id="timingDisplay">Frame time: 0.00ms</div>
+        
+        <h3>Active Shader Code</h3>
+        <pre id="shaderCodeDisplay"></pre>
     </div>
 
 <script>
-/* WebGPU Initialization Sequence */
-async function initWebGPU() {
-    // 1. Adapter/Device acquisition
-    const adapter = await navigator.gpu.requestAdapter();
-    const device = await adapter.requestDevice();
-    
-    // 2. Canvas context configuration
+// WebGPU initialization
+async function init() {
     const canvas = document.getElementById('mainCanvas');
+    const device = await navigator.gpu.requestAdapter().then(a => a.requestDevice());
     const context = canvas.getContext('webgpu');
     const format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format });
     
-    return { device, context, format };
-}
+    // Configure canvas
+    canvas.width = 1024;
+    canvas.height = 1024;
+    context.configure({ device, format });
 
-/* Shader Module Creation */
-function createShaderModule(device, code) {
-    return device.createShaderModule({
-        code: code.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '') // Strip comments
+    // Shader code templates
+    const shaders = {
+        branching: `
+            if uniforms.conditionalType == 0 {
+                if d < movingThreshold {
+                    color = vec3(1.0, 0.0, 0.0);
+                } else {
+                    color = vec3(0.0, 0.0, 1.0);
+                }
+            }`,
+            
+        branchless: `
+            let blend = step(movingThreshold, d);
+            color = mix(vec3(1.0,0.0,0.0), vec3(0.0,0.0,1.0), blend);`
+    };
+
+    // Update code display
+    function updateCodeDisplay(type) {
+        const code = type === 0 ? shaders.branching : shaders.branchless;
+        document.getElementById('shaderCodeDisplay').textContent = code;
+    }
+
+    // Rendering pipeline setup
+    const pipeline = device.createRenderPipeline({
+        vertex: { module: device.createShaderModule({ code: `/* vertex shader */` }) },
+        fragment: { 
+            module: device.createShaderModule({ code: document.querySelector('#fragmentShader').textContent }),
+            targets: [{ format }]
+        }
     });
+
+    // Uniform buffer setup
+    const uniformBuffer = device.createBuffer({
+        size: 12,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+
+    // Animation loop
+    let frameCount = 0;
+    let startTime = performance.now();
+    
+    function frame() {
+        const now = performance.now();
+        
+        // Update uniforms
+        const uniforms = new Float32Array([
+            document.getElementById('conditionalType').value,
+            document.getElementById('threshold').value,
+            (now - startTime) / 1000
+        ]);
+        
+        device.queue.writeBuffer(uniformBuffer, 0, uniforms);
+        
+        // Render pass
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+                view: context.getCurrentTexture().createView(),
+                loadOp: 'clear',
+                storeOp: 'store'
+            }]
+        });
+        
+        pass.setPipeline(pipeline);
+        pass.draw(3);
+        pass.end();
+        
+        device.queue.submit([commandEncoder.finish()]);
+        
+        // Update timing display every 60 frames
+        if(frameCount++ % 60 === 0) {
+            const elapsed = performance.now() - now;
+            document.getElementById('timingDisplay').textContent = 
+                `Frame time: ${elapsed.toFixed(2)}ms`;
+        }
+        
+        requestAnimationFrame(frame);
+    }
+    
+    // Initial code display
+    updateCodeDisplay(0);
+    document.getElementById('conditionalType').onchange = (e) => {
+        updateCodeDisplay(e.target.value);
+    };
+    
+    requestAnimationFrame(frame);
 }
 
-// ... [Rest of original script with added comments] ...
+init().catch(console.error);
+</script>
+
+<script id="fragmentShader" type="wgsl">
+// WGSL Fragment Shader
+struct Uniforms {
+    conditionalType: u32,
+    threshold: f32,
+    time: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+@fragment
+fn main(@builtin(position) coord: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = coord.xy / 1024.0;
+    let d = length(uv - vec2(0.5));
+    let t = uniforms.time;
+    let movingThreshold = uniforms.threshold * (0.5 + 0.5*sin(t));
+    
+    var color = vec3(0.0);
+    
+    if uniforms.conditionalType == 0 {
+        // Branching implementation
+        if d < movingThreshold {
+            color = vec3(1.0, 0.0, 0.0);
+        } else {
+            color = vec3(0.0, 0.0, 1.0);
+        }
+    } else {
+        // Branchless implementation
+        let blend = step(movingThreshold, d);
+        color = mix(vec3(1.0,0.0,0.0), vec3(0.0,0.0,1.0), blend);
+    }
+    
+    return vec4(color, 1.0);
+}
 </script>
 </body>
 </html>
