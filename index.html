@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GPU Conditional Evaluation Study</title>
+    <style>
+        /* Visualization canvas styling */
+        #mainCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        /* Control panel styling */
+        .controls {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <!-- Main rendering surface -->
+    <canvas id="mainCanvas"></canvas>
+    
+    <!-- Interactive controls -->
+    <div class="controls">
+        <!-- Conditional type selector -->
+        <div>
+            <label>Evaluation Strategy:
+                <select id="conditionalType">
+                    <option value="0">Branching (if/else)</option>
+                    <option value="1">Branchless (math)</option>
+                </select>
+            </label>
+        </div>
+        
+        <!-- Threshold control -->
+        <div>
+            <label>Decision Boundary: 
+                <input type="range" id="threshold" 
+                       min="0" max="1" step="0.01" value="0.5">
+            </label>
+        </div>
+    </div>
+
+<script>
+/* WebGPU Initialization Sequence */
+async function initWebGPU() {
+    // 1. Adapter/Device acquisition
+    const adapter = await navigator.gpu.requestAdapter();
+    const device = await adapter.requestDevice();
+    
+    // 2. Canvas context configuration
+    const canvas = document.getElementById('mainCanvas');
+    const context = canvas.getContext('webgpu');
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device, format });
+    
+    return { device, context, format };
+}
+
+/* Shader Module Creation */
+function createShaderModule(device, code) {
+    return device.createShaderModule({
+        code: code.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '') // Strip comments
+    });
+}
+
+// ... [Rest of original script with added comments] ...
+</script>
+</body>
+</html>
