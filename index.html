@@ -26,6 +26,91 @@
             border-radius: 5px;
             max-width: 600px;
             overflow-x: auto;
+        <!-- Add to styles -->
+<style>
+    .code-columns {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-top: 15px;
+    }
+    
+    .shader-box {
+        background: #1a1a1a;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #333;
+    }
+    
+    .shader-title {
+        color: #0ff;
+        margin-bottom: 8px;
+    }
+</style>
+
+<!-- Update controls section -->
+<div id="controls">
+    <!-- ... existing controls ... -->
+    
+    <div class="code-columns">
+        <div class="shader-box">
+            <div class="shader-title">Branching Shader (if/else)</div>
+            <pre id="branchingCode"></pre>
+        </div>
+        <div class="shader-box">
+            <div class="shader-title">Branchless Shader (math)</div>
+            <pre id="branchlessCode"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+// Update shader templates
+const shaderTemplates = {
+    branching: `@fragment
+fn main(...) -> ... {
+    let uv = coord.xy / 1024.0;
+    let d = length(uv - vec2(0.5));
+    
+    if uniforms.conditionalType == 0 {
+        // BRANCHING VERSION
+        if d < movingThreshold {
+            color = vec3(1,0,0);  // Red
+        } else {
+            color = vec3(0,0,1);  // Blue
+        }
+    } else {
+        // BRANCHLESS VERSION
+        let blend = step(movingThreshold, d);
+        color = mix(vec3(1,0,0), vec3(0,0,1), blend);
+    }
+}`,
+
+    branchless: `@fragment 
+fn main(...) -> ... {
+    let uv = coord.xy / 1024.0;
+    let d = length(uv - vec2(0.5));
+    
+    // BRANCHLESS IMPLEMENTATION
+    let blend = step(movingThreshold, d);
+    color = mix(vec3(1,0,0), vec3(0,0,1), blend);
+    
+    // Time-based animation
+    let t = uniforms.time * 0.001;
+    let movingThreshold = uniforms.threshold * (0.5 + 0.5*sin(t));
+}`
+};
+
+// Initialize code displays
+function initCodeDisplays() {
+    document.getElementById('branchingCode').textContent = shaderTemplates.branching;
+    document.getElementById('branchlessCode').textContent = shaderTemplates.branchless;
+}
+
+// Call this in init()
+initCodeDisplays();
+</script>
+
         }
     </style>
 </head>
