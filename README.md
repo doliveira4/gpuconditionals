@@ -49,5 +49,7 @@ PRs welcome! Please follow:
 - WebGPU best practices
 - Clear shader comments
 
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/doliveira4)
+
 ## License
 Free for non-commercial use © 2025 David Oliveira
