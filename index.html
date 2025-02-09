@@ -3,7 +3,6 @@
 <head>
     <title>GPU Conditional Benchmark</title>
     <style>
-        
         :root {
             --primary: #0ff;
             --background: #000;
@@ -16,31 +15,40 @@
             color: var(--text);
             margin: 0;
             font-family: monospace;
+            display: flex;
+            height: 100vh;
         }
 
         #controls {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.8);
+            flex: 1;
             padding: 20px;
-            border-radius: 8px;
-            border: 1px solid #333;
-            max-width: 800px;
+            overflow-y: auto;
+            box-sizing: border-box;
         }
 
         .code-columns {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
             margin-top: 15px;
         }
 
-        pre {
-            background: var(--code-bg);
-            padding: 15px;
+        .shader-editor {
+            background: #1a1a1a;
+            padding: 10px;
             border-radius: 5px;
-            white-space: pre-wrap;
+            height: 300px;
+        }
+        
+        textarea {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            color: #0f0;
+            border: 1px solid #333;
+            padding: 10px;
+            font-family: monospace;
+            resize: none;
         }
 
         button {
@@ -68,29 +76,14 @@
             border: 1px solid #333;
             text-align: left;
         }
-        
-        .shader-editor {
-            background: #1a1a1a;
-            padding: 10px;
-            border-radius: 5px;
-            height: 300px;
-        }
-        
-        textarea {
-            width: 100%;
-            height: 100%;
-            background: transparent;
-            color: #0f0;
-            border: 1px solid #333;
-            padding: 10px;
-            font-family: monospace;
-            resize: none;
+
+        #mainCanvas {
+            flex: 1;
+            height: 100vh;
         }
     </style>
 </head>
 <body>
-    <canvas id="mainCanvas"></canvas>
-    
     <div id="controls">
         <button id="benchmarkButton">Run Benchmark (100 iterations)</button>
         
@@ -151,85 +144,163 @@ fn main(@builtin(position) coord: vec4<f32>) -> @location(0) vec4<f32> {
         <div id="results"></div>
     </div>
 
+    <canvas id="mainCanvas"></canvas>
+
 <script>
+let device, context, format;
 let pipelines = {
     branching: null,
     branchless: null
 };
+let uniformBuffer, bindGroup;
 
-async function createPipeline(device, format, code) {
-    try {
-        return device.createRenderPipeline({
-            vertex: { 
-                module: device.createShaderModule({
-                    code: `@vertex fn main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-                        const pos = array(vec2(-1,-1), vec2(3,-1), vec2(-1,3));
-                        return vec4(pos[vi], 0, 1);
-                    }`
-                })
-            },
-            fragment: {
-                module: device.createShaderModule({ code }),
-                targets: [{ format }]
-            },
-            layout: 'auto'
-        });
-    } catch (error) {
-        console.error('Shader compilation failed:', error);
-        return null;
-    }
+async function createPipeline(code) {
+    const shaderModule = device.createShaderModule({ code });
+    return device.createRenderPipeline({
+        layout: 'auto',
+        vertex: {
+            module: shaderModule,
+            entryPoint: 'main',
+        },
+        fragment: {
+            module: shaderModule,
+            entryPoint: 'main',
+            targets: [{ format }],
+        },
+        primitive: {
+            topology: 'triangle-list',
+        },
+    });
 }
 
 async function init() {
+    if (!navigator.gpu) {
+        throw new Error('WebGPU not supported on this browser.');
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    device = await adapter.requestDevice();
+
     const canvas = document.getElementById('mainCanvas');
-    const device = await navigator.gpu.requestAdapter().then(a => a.requestDevice());
-    const context = canvas.getContext('webgpu');
-    const format = navigator.gpu.getPreferredCanvasFormat();
-    
-    canvas.width = 1024;
-    canvas.height = 1024;
+    context = canvas.getContext('webgpu');
+    format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format });
 
-    // Initial pipeline compilation
-    pipelines.branching = await createPipeline(device, format, 
-        document.getElementById('branchingShader').value);
-        
-    pipelines.branchless = await createPipeline(device, format, 
-        document.getElementById('branchlessShader').value);
-
-    // Uniform setup (now only needs time)
-    const uniformBuffer = device.createBuffer({
+    uniformBuffer = device.createBuffer({
         size: 4,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Event listeners for code edits
+    bindGroup = device.createBindGroup({
+        layout: device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform' },
+                },
+            ],
+        }),
+        entries: [
+            {
+                binding: 0,
+                resource: { buffer: uniformBuffer },
+            },
+        ],
+    });
+
+    pipelines.branching = await createPipeline(document.getElementById('branchingShader').value);
+    pipelines.branchless = await createPipeline(document.getElementById('branchlessShader').value);
+
     document.getElementById('branchingShader').addEventListener('input', async () => {
-        pipelines.branching = await createPipeline(device, format, 
-            document.getElementById('branchingShader').value);
+        pipelines.branching = await createPipeline(document.getElementById('branchingShader').value);
     });
     
     document.getElementById('branchlessShader').addEventListener('input', async () => {
-        pipelines.branchless = await createPipeline(device, format, 
-            document.getElementById('branchlessShader').value);
+        pipelines.branchless = await createPipeline(document.getElementById('branchlessShader').value);
     });
 
-    // Benchmark functionality
-    document.getElementById('benchmarkButton').addEventListener('click', async () => {
-        // ... similar benchmark code as before, but using separate pipelines ... 
-    });
+    document.getElementById('benchmarkButton').addEventListener('click', runBenchmark);
 
-    // Animation loop
-    function frame() {
-        const time = performance.now() / 1000;
-        device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([time]));
-        
-        // Render both shaders side-by-side
-        // ... rendering code using both pipelines ...
-        
-        requestAnimationFrame(frame);
-    }
     requestAnimationFrame(frame);
+}
+
+function frame() {
+    const time = performance.now() / 1000;
+    device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([time]));
+    
+    const commandEncoder = device.createCommandEncoder();
+    const textureView = context.getCurrentTexture().createView();
+
+    const renderPassDescriptor = {
+        colorAttachments: [
+            {
+                view: textureView,
+                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                loadOp: 'clear',
+                storeOp: 'store',
+            },
+        ],
+    };
+
+    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+    passEncoder.setPipeline(pipelines.branching);
+    passEncoder.setBindGroup(0, bindGroup);
+    passEncoder.draw(3);
+    passEncoder.end();
+
+    device.queue.submit([commandEncoder.finish()]);
+
+    requestAnimationFrame(frame);
+}
+
+async function runBenchmark() {
+    const iterations = 100;
+    const results = { branching: [], branchless: [] };
+
+    for (let i = 0; i < iterations; i++) {
+        results.branching.push(await measurePerformance(pipelines.branching));
+        results.branchless.push(await measurePerformance(pipelines.branchless));
+    }
+
+    const avgBranching = results.branching.reduce((a, b) => a + b) / iterations;
+    const avgBranchless = results.branchless.reduce((a, b) => a + b) / iterations;
+
+    document.getElementById('results').innerHTML = `
+        <h3>Benchmark Results (${iterations} iterations)</h3>
+        <table class="benchmark-table">
+            <tr><th>Shader</th><th>Average Time (ms)</th></tr>
+            <tr><td>Branching</td><td>${avgBranching.toFixed(3)}</td></tr>
+            <tr><td>Branchless</td><td>${avgBranchless.toFixed(3)}</td></tr>
+        </table>
+        <p>Performance Difference: ${((avgBranchless - avgBranching) / avgBranching * 100).toFixed(2)}%</p>
+    `;
+}
+
+async function measurePerformance(pipeline) {
+    const commandEncoder = device.createCommandEncoder();
+    const textureView = context.getCurrentTexture().createView();
+
+    const renderPassDescriptor = {
+        colorAttachments: [
+            {
+                view: textureView,
+                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                loadOp: 'clear',
+                storeOp: 'store',
+            },
+        ],
+    };
+
+    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+    passEncoder.setPipeline(pipeline);
+    passEncoder.setBindGroup(0, bindGroup);
+    passEncoder.draw(3);
+    passEncoder.end();
+
+    const start = performance.now();
+    device.queue.submit([commandEncoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    return performance.now() - start;
 }
 
 init().catch(console.error);
