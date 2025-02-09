@@ -1,309 +1,166 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>GPU Conditional Benchmark</title>
-    <style>
-        :root {
-            --primary: #0ff;
-            --background: #000;
-            --text: #fff;
-            --code-bg: #1a1a1a;
-        }
-
-        body {
-            background: var(--background);
-            color: var(--text);
-            margin: 0;
-            font-family: monospace;
-            display: flex;
-            height: 100vh;
-        }
-
-        #controls {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            box-sizing: border-box;
-        }
-
-        .code-columns {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-top: 15px;
-        }
-
-        .shader-editor {
-            background: #1a1a1a;
-            padding: 10px;
-            border-radius: 5px;
-            height: 300px;
-        }
-        
-        textarea {
-            width: 100%;
-            height: 100%;
-            background: transparent;
-            color: #0f0;
-            border: 1px solid #333;
-            padding: 10px;
-            font-family: monospace;
-            resize: none;
-        }
-
-        button {
-            background: #222;
-            color: var(--primary);
-            border: 1px solid var(--primary);
-            padding: 8px 15px;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-
-        #results {
-            margin-top: 20px;
-            padding: 15px;
-            background: #111;
-        }
-
-        .benchmark-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        .benchmark-table td, .benchmark-table th {
-            padding: 8px;
-            border: 1px solid #333;
-            text-align: left;
-        }
-
-        #mainCanvas {
-            flex: 1;
-            height: 100vh;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>GPU Conditionals Demo</title>
+  <style>
+    /* Make the canvas fill the entire window */
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000;
+      height: 100%;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
 </head>
 <body>
-    <div id="controls">
-        <button id="benchmarkButton">Run Benchmark (100 iterations)</button>
-        
-        <div class="code-columns">
-            <div class="shader-box">
-                <h3>Branching Shader (Editable)</h3>
-                <div class="shader-editor">
-                    <textarea id="branchingShader">// Full branching shader code
-struct Uniforms {
-    time: f32
-};
+  <!-- A single canvas element for WebGL output -->
+  <canvas id="glcanvas"></canvas>
+  <script>
+    // Get the canvas and set its dimensions
+    const canvas = document.getElementById('glcanvas');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-@fragment
-fn main(@builtin(position) coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let uv = coord.xy / 1024.0;
-    let d = length(uv - vec2(0.5));
-    let threshold = 0.5 * (1.0 + sin(uniforms.time));
-    
-    var color = vec3(0.0);
-    if d < threshold {
-        color = vec3(1.0, 0.0, 0.0);
-    } else {
-        color = vec3(0.0, 0.0, 1.0);
-    }
-    
-    return vec4(color, 1.0);
-}</textarea>
-                </div>
-            </div>
-            
-            <div class="shader-box">
-                <h3>Branchless Shader (Editable)</h3>
-                <div class="shader-editor">
-                    <textarea id="branchlessShader">// Full branchless shader code
-struct Uniforms {
-    time: f32
-};
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-@fragment
-fn main(@builtin(position) coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let uv = coord.xy / 1024.0;
-    let d = length(uv - vec2(0.5));
-    let threshold = 0.5 * (1.0 + sin(uniforms.time));
-    
-    let blend = step(threshold, d);
-    let color = mix(vec3(1.0,0.0,0.0), vec3(0.0,0.0,1.0), blend);
-    
-    return vec4(color, 1.0);
-}</textarea>
-                </div>
-            </div>
-        </div>
-
-        <div id="results"></div>
-    </div>
-
-    <canvas id="mainCanvas"></canvas>
-
-<script>
-let device, context, format;
-let pipelines = {
-    branching: null,
-    branchless: null
-};
-let uniformBuffer, bindGroup;
-
-async function createPipeline(code) {
-    const shaderModule = device.createShaderModule({ code });
-    return device.createRenderPipeline({
-        layout: 'auto',
-        vertex: {
-            module: shaderModule,
-            entryPoint: 'main',
-        },
-        fragment: {
-            module: shaderModule,
-            entryPoint: 'main',
-            targets: [{ format }],
-        },
-        primitive: {
-            topology: 'triangle-list',
-        },
-    });
-}
-
-async function init() {
-    if (!navigator.gpu) {
-        throw new Error('WebGPU not supported on this browser.');
-    }
-    const adapter = await navigator.gpu.requestAdapter();
-    device = await adapter.requestDevice();
-
-    const canvas = document.getElementById('mainCanvas');
-    context = canvas.getContext('webgpu');
-    format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format });
-
-    uniformBuffer = device.createBuffer({
-        size: 4,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    bindGroup = device.createBindGroup({
-        layout: device.createBindGroupLayout({
-            entries: [
-                {
-                    binding: 0,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: 'uniform' },
-                },
-            ],
-        }),
-        entries: [
-            {
-                binding: 0,
-                resource: { buffer: uniformBuffer },
-            },
-        ],
-    });
-
-    pipelines.branching = await createPipeline(document.getElementById('branchingShader').value);
-    pipelines.branchless = await createPipeline(document.getElementById('branchlessShader').value);
-
-    document.getElementById('branchingShader').addEventListener('input', async () => {
-        pipelines.branching = await createPipeline(document.getElementById('branchingShader').value);
-    });
-    
-    document.getElementById('branchlessShader').addEventListener('input', async () => {
-        pipelines.branchless = await createPipeline(document.getElementById('branchlessShader').value);
-    });
-
-    document.getElementById('benchmarkButton').addEventListener('click', runBenchmark);
-
-    requestAnimationFrame(frame);
-}
-
-function frame() {
-    const time = performance.now() / 1000;
-    device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([time]));
-    
-    const commandEncoder = device.createCommandEncoder();
-    const textureView = context.getCurrentTexture().createView();
-
-    const renderPassDescriptor = {
-        colorAttachments: [
-            {
-                view: textureView,
-                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-                loadOp: 'clear',
-                storeOp: 'store',
-            },
-        ],
-    };
-
-    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-    passEncoder.setPipeline(pipelines.branching);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.draw(3);
-    passEncoder.end();
-
-    device.queue.submit([commandEncoder.finish()]);
-
-    requestAnimationFrame(frame);
-}
-
-async function runBenchmark() {
-    const iterations = 100;
-    const results = { branching: [], branchless: [] };
-
-    for (let i = 0; i < iterations; i++) {
-        results.branching.push(await measurePerformance(pipelines.branching));
-        results.branchless.push(await measurePerformance(pipelines.branchless));
+    // Initialize WebGL
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert("WebGL not supported in your browser");
+      throw new Error("WebGL not supported");
     }
 
-    const avgBranching = results.branching.reduce((a, b) => a + b) / iterations;
-    const avgBranchless = results.branchless.reduce((a, b) => a + b) / iterations;
-
-    document.getElementById('results').innerHTML = `
-        <h3>Benchmark Results (${iterations} iterations)</h3>
-        <table class="benchmark-table">
-            <tr><th>Shader</th><th>Average Time (ms)</th></tr>
-            <tr><td>Branching</td><td>${avgBranching.toFixed(3)}</td></tr>
-            <tr><td>Branchless</td><td>${avgBranchless.toFixed(3)}</td></tr>
-        </table>
-        <p>Performance Difference: ${((avgBranchless - avgBranching) / avgBranching * 100).toFixed(2)}%</p>
+    // Vertex shader – simply passes through vertex positions.
+    const vsSource = `
+      attribute vec2 a_position;
+      void main(void) {
+        // a_position is in clip-space already (range -1 to 1)
+        gl_Position = vec4(a_position, 0.0, 1.0);
+      }
     `;
-}
 
-async function measurePerformance(pipeline) {
-    const commandEncoder = device.createCommandEncoder();
-    const textureView = context.getCurrentTexture().createView();
+    // Fragment shader – demonstrates a GPU conditional.
+    // It computes a dynamic radius (oscillating with time) and colors each fragment
+    // based on whether its distance to the center is less than the radius.
+    const fsSource = `
+      precision mediump float;
+      uniform vec2 u_resolution;
+      uniform float u_time;
+      void main(void) {
+        // Normalize pixel coordinates (0.0 - 1.0)
+        vec2 st = gl_FragCoord.xy / u_resolution;
+        
+        // Center coordinate of the screen
+        vec2 center = vec2(0.5, 0.5);
+        
+        // Compute the distance from the current fragment to the center
+        float dist = distance(st, center);
+        
+        // Create a dynamic radius that oscillates with time
+        float radius = 0.3 + 0.1 * sin(u_time);
+        
+        vec3 color;
+        // GPU conditional: branch based on distance from the center.
+        if (dist < radius) {
+          // Inside the dynamic circle – use a warm gradient.
+          color = mix(vec3(1.0, 0.8, 0.2), vec3(1.0, 0.5, 0.0), dist / radius);
+        } else {
+          // Outside the circle – use a cool background gradient.
+          color = mix(vec3(0.0, 0.2, 0.4), vec3(0.0, 0.0, 0.2), st.y);
+        }
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
 
-    const renderPassDescriptor = {
-        colorAttachments: [
-            {
-                view: textureView,
-                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-                loadOp: 'clear',
-                storeOp: 'store',
-            },
-        ],
-    };
+    // Helper function to compile a shader.
+    function compileShader(gl, source, type) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const error = gl.getShaderInfoLog(shader);
+        console.error('Error compiling shader:', error);
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
 
-    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-    passEncoder.setPipeline(pipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.draw(3);
-    passEncoder.end();
+    // Compile the vertex and fragment shaders.
+    const vertexShader = compileShader(gl, vsSource, gl.VERTEX_SHADER);
+    const fragmentShader = compileShader(gl, fsSource, gl.FRAGMENT_SHADER);
 
-    const start = performance.now();
-    device.queue.submit([commandEncoder.finish()]);
-    await device.queue.onSubmittedWorkDone();
-    return performance.now() - start;
-}
+    // Create and link the WebGL program.
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Error linking program:', gl.getProgramInfoLog(program));
+      throw new Error('Program link failed');
+    }
 
-init().catch(console.error);
-</script>
+    // Look up locations of attributes and uniforms.
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+    const timeLocation = gl.getUniformLocation(program, 'u_time');
+
+    // Create a buffer and put a rectangle covering clip space.
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    // Two triangles that form a rectangle covering the entire canvas.
+    const positions = new Float32Array([
+      -1, -1,
+       1, -1,
+      -1,  1,
+      -1,  1,
+       1, -1,
+       1,  1,
+    ]);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    // Main render loop
+    let startTime = null;
+    function render(time) {
+      if (!startTime) startTime = time;
+      const elapsedTime = (time - startTime) / 1000.0; // Convert to seconds
+
+      // Adjust the viewport and clear the canvas.
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      // Use the compiled shader program.
+      gl.useProgram(program);
+
+      // Set the resolution and time uniforms.
+      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      gl.uniform1f(timeLocation, elapsedTime);
+
+      // Enable the vertex attribute.
+      gl.enableVertexAttribArray(positionLocation);
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      // Draw the rectangle.
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Request the next frame.
+      requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+
+    // Update canvas size on window resize.
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    });
+  </script>
 </body>
 </html>
