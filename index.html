@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>GPU Conditionals Benchmark – Branching vs. Branchless</title>
+  <title>GPU Conditionals Benchmark – snap45 Comparison</title>
   <style>
-    /* Basic reset and layout */
+    /* Reset and layout */
     html, body {
       margin: 0;
       padding: 0;
@@ -13,7 +13,7 @@
       background: #111;
       color: #ddd;
     }
-    /* Top controls */
+    /* Top control bar */
     #controls {
       padding: 10px;
       background-color: #222;
@@ -24,7 +24,7 @@
     #controls input {
       margin-right: 10px;
     }
-    /* Main container for two panels */
+    /* Container for the two panels */
     #container {
       display: flex;
       flex-wrap: wrap;
@@ -49,7 +49,7 @@
       font-size: 0.9em;
       margin-bottom: 5px;
       resize: vertical;
-      height: 150px;
+      height: 200px;
       background: #222;
       color: #ddd;
       border: 1px solid #555;
@@ -79,16 +79,16 @@
   </style>
 </head>
 <body>
-  <!-- Shared control: adjust the threshold uniform -->
+  <!-- Shared control: adjust the threshold factor -->
   <div id="controls">
     <label for="thresholdSlider">Threshold:</label>
-    <input type="range" id="thresholdSlider" min="0" max="1" step="0.01" value="0.5">
-    <span id="thresholdValue">0.50</span>
+    <input type="range" id="thresholdSlider" min="0.1" max="2.0" step="0.01" value="1.0">
+    <span id="thresholdValue">1.00</span>
   </div>
 
   <!-- Two panels: one per shader strategy -->
   <div id="container">
-    <!-- Panel for the Branching (if/else) shader -->
+    <!-- Branching version panel -->
     <div class="panel">
       <h2>Branching Shader (if/else)</h2>
       <textarea id="branchEditor"></textarea>
@@ -97,7 +97,7 @@
       <div class="metrics" id="branchMetrics">Frame Time: N/A</div>
     </div>
 
-    <!-- Panel for the Branchless (step + mix) shader -->
+    <!-- Branchless version panel -->
     <div class="panel">
       <h2>Branchless Shader (step + mix)</h2>
       <textarea id="branchlessEditor"></textarea>
@@ -107,9 +107,9 @@
     </div>
   </div>
 
-  <!-- Main script: initializes WebGPU, creates pipelines, and starts render loops -->
+  <!-- Main Script: sets up WebGPU, pipelines, UI, and render loops -->
   <script type="module">
-    // Check for WebGPU support.
+    // Ensure the browser supports WebGPU.
     if (!navigator.gpu) {
       alert("WebGPU is not supported in this browser.");
       throw new Error("WebGPU not supported");
@@ -117,15 +117,38 @@
 
     // Top-level async initialization.
     (async () => {
-      // Request the GPU adapter and device.
+      // Request adapter and device.
       const adapter = await navigator.gpu.requestAdapter();
       const device = await adapter.requestDevice();
 
-      // --- Common Vertex Shader (WGSL) ---
-      const vertexWGSL = `// Full-screen triangle vertex shader
+      // --- Default WGSL Code for Each Strategy ---
+      // The uniform struct holds: vec2 resolution, float time, float threshold.
+      // The "snap45" function is implemented in two different ways.
+      const defaultBranchWGSL = `// Branching shader (if/else) version of snap45
+struct Uniforms {
+  resolution: vec2<f32>,
+  time: f32,
+  threshold: f32,
+};
+
+@group(0) @binding(0)
+var<uniform> uniforms: Uniforms;
+
+fn snap45(v: vec2<f32>) -> vec2<f32> {
+  let s = sign(v);
+  let x = abs(v.x);
+  if (x > 0.923880 * uniforms.threshold) {
+    return vec2<f32>(s.x, 0.0);
+  } else if (x > 0.382683 * uniforms.threshold) {
+    return s * sqrt(0.5);
+  } else {
+    return vec2<f32>(0.0, s.y);
+  }
+}
+
 struct VertexOutput {
-  @builtin(position) position : vec4<f32>,
-  @location(0) fragUV : vec2<f32>,
+  @builtin(position) position: vec4<f32>,
+  @location(0) fragUV: vec2<f32>,
 };
 
 @vertex
@@ -135,16 +158,24 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     vec2<f32>( 3.0,  1.0),
     vec2<f32>(-1.0,  1.0)
   );
-  var output : VertexOutput;
+  var output: VertexOutput;
   output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  // Map from clip space to UV coordinates (0..1)
   output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0, 1.0)) * 0.5;
   return output;
 }
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+  let uv = in.fragUV;
+  let v = uv * 2.0 - vec2<f32>(1.0, 1.0);
+  let result = snap45(v);
+  // Map result from [-1,1] to [0,1] for visualization.
+  let color = vec3<f32>(result.x * 0.5 + 0.5, result.y * 0.5 + 0.5, 0.0);
+  return vec4<f32>(color, 1.0);
+}
 `;
 
-      // --- Default WGSL code for each strategy ---
-      const defaultBranchWGSL = `// Branching shader (if/else)
+      const defaultBranchlessWGSL = `// Branchless shader (step + mix) version of snap45
 struct Uniforms {
   resolution: vec2<f32>,
   time: f32,
@@ -152,11 +183,23 @@ struct Uniforms {
 };
 
 @group(0) @binding(0)
-var<uniform> uniforms : Uniforms;
+var<uniform> uniforms: Uniforms;
+
+fn snap45(v: vec2<f32>) -> vec2<f32> {
+  let s = sign(v);
+  let x = abs(v.x);
+  let w0 = step(0.92387953 * uniforms.threshold, x);
+  let w1 = step(0.38268343 * uniforms.threshold, x) * (1.0 - w0);
+  let w2 = 1.0 - w0 - w1;
+  let res0 = vec2<f32>(s.x, 0.0);
+  let res1 = vec2<f32>(s.x, s.y) * sqrt(0.5);
+  let res2 = vec2<f32>(0.0, s.y);
+  return w0 * res0 + w1 * res1 + w2 * res2;
+}
 
 struct VertexOutput {
-  @builtin(position) position : vec4<f32>,
-  @location(0) fragUV : vec2<f32>,
+  @builtin(position) position: vec4<f32>,
+  @location(0) fragUV: vec2<f32>,
 };
 
 @vertex
@@ -166,74 +209,34 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     vec2<f32>( 3.0,  1.0),
     vec2<f32>(-1.0,  1.0)
   );
-  var output : VertexOutput;
+  var output: VertexOutput;
   output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0,1.0)) * 0.5;
+  output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0, 1.0)) * 0.5;
   return output;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-  let d = distance(in.fragUV, vec2<f32>(0.5, 0.5));
-  var color: vec3<f32>;
-  if (d < uniforms.threshold) {
-    color = vec3<f32>(1.0, 0.0, 0.0);
-  } else {
-    color = vec3<f32>(0.0, 0.0, 1.0);
-  }
+  let uv = in.fragUV;
+  let v = uv * 2.0 - vec2<f32>(1.0, 1.0);
+  let result = snap45(v);
+  let color = vec3<f32>(result.x * 0.5 + 0.5, result.y * 0.5 + 0.5, 0.0);
   return vec4<f32>(color, 1.0);
 }
 `;
 
-      const defaultBranchlessWGSL = `// Branchless shader (step + mix)
-struct Uniforms {
-  resolution: vec2<f32>,
-  time: f32,
-  threshold: f32,
-};
-
-@group(0) @binding(0)
-var<uniform> uniforms : Uniforms;
-
-struct VertexOutput {
-  @builtin(position) position : vec4<f32>,
-  @location(0) fragUV : vec2<f32>,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  var pos = array<vec2<f32>, 3>(
-    vec2<f32>(-1.0, -3.0),
-    vec2<f32>( 3.0,  1.0),
-    vec2<f32>(-1.0,  1.0)
-  );
-  var output : VertexOutput;
-  output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0,1.0)) * 0.5;
-  return output;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-  let d = distance(in.fragUV, vec2<f32>(0.5, 0.5));
-  let t = step(d, uniforms.threshold);
-  let color = vec3<f32>(0.0, 0.0, 1.0) + (vec3<f32>(1.0, 0.0, 0.0) - vec3<f32>(0.0, 0.0, 1.0)) * t;
-  return vec4<f32>(color, 1.0);
-}
-`;
-
-      // Set the default code into each editor.
+      // Set the default WGSL code in each editor.
       document.getElementById("branchEditor").value = defaultBranchWGSL;
       document.getElementById("branchlessEditor").value = defaultBranchlessWGSL;
 
-      // --- Canvas & Context Setup ---
+      // --- Canvas and Context Setup ---
       const branchCanvas = document.getElementById("branchCanvas");
       const branchlessCanvas = document.getElementById("branchlessCanvas");
 
-      // A helper to initialize a canvas with a WebGPU context.
+      // Helper to initialize a canvas with a WebGPU context.
       function initCanvas(canvas) {
         const context = canvas.getContext("webgpu");
-        // Set canvas CSS size first then update its drawing buffer size.
+        // Ensure the drawing buffer is set from CSS size.
         canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
         canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -247,9 +250,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const branchSetup = initCanvas(branchCanvas);
       const branchlessSetup = initCanvas(branchlessCanvas);
 
-      // --- Uniform Buffer & Bind Group ---
-      // Our uniform struct contains 4 float32 values:
-      //   vec2<f32> resolution, f32 time, f32 threshold (16 bytes total)
+      // --- Uniform Buffer and Bind Groups ---
+      // Uniforms: 4 floats (vec2 resolution, time, threshold) = 16 bytes.
       const uniformBufferSize = 4 * 4;
       function createUniformBuffer() {
         return device.createBuffer({
@@ -260,7 +262,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const branchUniformBuffer = createUniformBuffer();
       const branchlessUniformBuffer = createUniformBuffer();
 
-      // Create a bind group layout and pipeline layout.
+      // Bind group layout: one uniform buffer at binding 0.
       const bindGroupLayout = device.createBindGroupLayout({
         entries: [{
           binding: 0,
@@ -271,7 +273,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       const pipelineLayout = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayout]
       });
-      // Create bind groups using the uniform buffers.
+      // Helper to create a bind group.
       function createBindGroup(uniformBuffer) {
         return device.createBindGroup({
           layout: bindGroupLayout,
@@ -284,20 +286,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       let branchBindGroup = createBindGroup(branchUniformBuffer);
       let branchlessBindGroup = createBindGroup(branchlessUniformBuffer);
 
-      // --- Pipeline Creation Function ---
-      // Given WGSL code for the fragment shader and the canvas format, create a pipeline.
-      function createPipeline(fragmentWGSL, presentationFormat) {
-        const shaderModuleFragment = device.createShaderModule({ code: fragmentWGSL });
-        const shaderModuleVertex = device.createShaderModule({ code: vertexWGSL });
+      // --- Pipeline Creation ---
+      // Given full WGSL code (vertex + fragment), create a render pipeline.
+      function createPipeline(shaderCode, presentationFormat) {
+        const shaderModule = device.createShaderModule({ code: shaderCode });
         try {
           const pipeline = device.createRenderPipeline({
             layout: pipelineLayout,
             vertex: {
-              module: shaderModuleVertex,
+              module: shaderModule,
               entryPoint: "vs_main",
             },
             fragment: {
-              module: shaderModuleFragment,
+              module: shaderModule,
               entryPoint: "fs_main",
               targets: [{ format: presentationFormat }]
             },
@@ -322,7 +323,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       });
 
       // --- Performance Metrics ---
-      // Arrays to store the last 100 frame times for each render loop.
       const branchFrameTimes = [];
       const branchlessFrameTimes = [];
       const branchMetricsEl = document.getElementById("branchMetrics");
@@ -345,7 +345,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         branchFrameTimes.push(delta);
         if (branchFrameTimes.length > 100) branchFrameTimes.shift();
         updateMetrics(branchMetricsEl, branchFrameTimes);
-        // Update uniform buffer: [resolution.x, resolution.y, time, threshold]
+        // Update uniform buffer: [width, height, time, threshold]
         const uniformData = new Float32Array([
           branchCanvas.width,
           branchCanvas.height,
@@ -408,7 +408,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         requestAnimationFrame(renderBranchless);
       }
 
-      // Start the continuous render loops.
+      // Start both render loops.
       renderBranch();
       renderBranchless();
 
