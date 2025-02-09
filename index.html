@@ -3,20 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <title>GPU Conditionals Benchmark – snap45 Comparison</title>
+  <!-- Ace Editor from CDN for syntax highlighting -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js" integrity="sha512-oRz6wK1oP5w8XaxJPmJYr++4jvtphKwLEdi+EbtxmH7cWFUhy9bWlL4RcpXqL7kBUHd21SkB98uP3imW6v9EXg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
-    /* Reset and layout */
+    /* Basic reset and full-viewport flex layout */
     html, body {
       margin: 0;
       padding: 0;
-      height: 100%;
+      height: 100vh;
       font-family: sans-serif;
       background: #111;
       color: #ddd;
     }
+    body {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
     /* Top control bar */
     #controls {
-      padding: 10px;
+      flex: 0 0 50px;
       background-color: #222;
+      padding: 10px;
       display: flex;
       align-items: center;
     }
@@ -24,11 +32,12 @@
     #controls input {
       margin-right: 10px;
     }
-    /* Container for the two panels */
+    /* Main container for the two panels */
     #container {
+      flex: 1;
       display: flex;
       flex-wrap: wrap;
-      height: calc(100% - 50px);
+      overflow: auto;
     }
     .panel {
       flex: 1 1 50%;
@@ -37,23 +46,18 @@
       border: 1px solid #444;
       display: flex;
       flex-direction: column;
+      min-width: 300px;
     }
     .panel h2 {
       margin: 0 0 5px;
       font-size: 1.1em;
     }
-    .panel textarea {
+    /* Ace Editor container styling */
+    .editor {
       width: 100%;
-      box-sizing: border-box;
-      font-family: monospace;
-      font-size: 0.9em;
-      margin-bottom: 5px;
-      resize: vertical;
       height: 200px;
-      background: #222;
-      color: #ddd;
       border: 1px solid #555;
-      padding: 5px;
+      margin-bottom: 5px;
     }
     .panel button {
       margin-bottom: 5px;
@@ -71,68 +75,76 @@
       width: 100%;
       background-color: #000;
       border: 1px solid #444;
+      margin-top: 5px;
     }
     .metrics {
       margin-top: 5px;
       font-size: 0.9em;
     }
+    /* Footer with Buy Me A Coffee button */
+    #footer {
+      flex: 0 0 60px;
+      background-color: #222;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #footer a img {
+      height: 60px;
+      width: auto;
+    }
   </style>
 </head>
 <body>
-  <!-- Shared control: adjust the threshold factor -->
+  <!-- Top control bar -->
   <div id="controls">
     <label for="thresholdSlider">Threshold:</label>
     <input type="range" id="thresholdSlider" min="0.1" max="2.0" step="0.01" value="1.0">
     <span id="thresholdValue">1.00</span>
   </div>
 
-  <!-- Two panels: one per shader strategy -->
+  <!-- Main container with two panels -->
   <div id="container">
-    <!-- Branching version panel -->
+    <!-- Branching shader panel -->
     <div class="panel">
       <h2>Branching Shader (if/else)</h2>
-      <textarea id="branchEditor"></textarea>
+      <div id="branchEditor" class="editor"></div>
       <button id="compileBranch">Compile Branching Shader</button>
       <canvas id="branchCanvas"></canvas>
       <div class="metrics" id="branchMetrics">Frame Time: N/A</div>
     </div>
-
-    <!-- Branchless version panel -->
+    <!-- Branchless shader panel -->
     <div class="panel">
       <h2>Branchless Shader (step + mix)</h2>
-      <textarea id="branchlessEditor"></textarea>
+      <div id="branchlessEditor" class="editor"></div>
       <button id="compileBranchless">Compile Branchless Shader</button>
       <canvas id="branchlessCanvas"></canvas>
       <div class="metrics" id="branchlessMetrics">Frame Time: N/A</div>
     </div>
   </div>
 
-  <!-- Main Script: sets up WebGPU, pipelines, UI, and render loops -->
+  <!-- Footer with Buy Me A Coffee button -->
+  <div id="footer">
+    <a href="https://buymeacoffee.com/doliveira4" target="_blank">
+      <img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee">
+    </a>
+  </div>
+
+  <!-- Main Script -->
   <script type="module">
-    // Ensure the browser supports WebGPU.
-    if (!navigator.gpu) {
-      alert("WebGPU is not supported in this browser.");
-      throw new Error("WebGPU not supported");
-    }
-
-    // Top-level async initialization.
-    (async () => {
-      // Request adapter and device.
-      const adapter = await navigator.gpu.requestAdapter();
-      const device = await adapter.requestDevice();
-
-      // --- Default WGSL Code for Each Strategy ---
-      // The uniform struct holds: vec2 resolution, float time, float threshold.
-      // The "snap45" function is implemented in two different ways.
-      const defaultBranchWGSL = `// Branching shader (if/else) version of snap45
+    // WGSL shader code constants with fixes:
+    // Vertex Position Fix and Uniform Alignment Fix are applied.
+    const defaultBranchWGSL = `
+// Branching shader (if/else) version of snap45
 struct Uniforms {
   resolution: vec2<f32>,
   time: f32,
   threshold: f32,
+  _pad: f32
 };
 
 @group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+var<uniform> uniforms : Uniforms;
 
 fn snap45(v: vec2<f32>) -> vec2<f32> {
   let s = sign(v);
@@ -146,44 +158,39 @@ fn snap45(v: vec2<f32>) -> vec2<f32> {
   }
 }
 
-struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) fragUV: vec2<f32>,
-};
-
 @vertex
-fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+  // Vertex Position Fix: full-screen triangle
   var pos = array<vec2<f32>, 3>(
-    vec2<f32>(-1.0, -3.0),
-    vec2<f32>( 3.0,  1.0),
-    vec2<f32>(-1.0,  1.0)
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>( 3.0, -1.0),
+    vec2<f32>(-1.0,  3.0)
   );
-  var output: VertexOutput;
-  output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0, 1.0)) * 0.5;
-  return output;
+  return vec4<f32>(pos[vertexIndex], 0.0, 1.0);
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-  let uv = in.fragUV;
-  let v = uv * 2.0 - vec2<f32>(1.0, 1.0);
+fn fs_main() -> @location(0) vec4<f32> {
+  // For visualization, compute a simple value from snap45.
+  let uv = vec2<f32>(0.5); // fixed UV for demo purposes
+  let v = uv * 2.0 - vec2<f32>(1.0);
   let result = snap45(v);
-  // Map result from [-1,1] to [0,1] for visualization.
   let color = vec3<f32>(result.x * 0.5 + 0.5, result.y * 0.5 + 0.5, 0.0);
   return vec4<f32>(color, 1.0);
 }
 `;
 
-      const defaultBranchlessWGSL = `// Branchless shader (step + mix) version of snap45
+    const defaultBranchlessWGSL = `
+// Branchless shader (step + mix) version of snap45
 struct Uniforms {
   resolution: vec2<f32>,
   time: f32,
   threshold: f32,
+  _pad: f32
 };
 
 @group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+var<uniform> uniforms : Uniforms;
 
 fn snap45(v: vec2<f32>) -> vec2<f32> {
   let s = sign(v);
@@ -197,84 +204,200 @@ fn snap45(v: vec2<f32>) -> vec2<f32> {
   return w0 * res0 + w1 * res1 + w2 * res2;
 }
 
-struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) fragUV: vec2<f32>,
-};
-
 @vertex
-fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+  // Vertex Position Fix: full-screen triangle
   var pos = array<vec2<f32>, 3>(
-    vec2<f32>(-1.0, -3.0),
-    vec2<f32>( 3.0,  1.0),
-    vec2<f32>(-1.0,  1.0)
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>( 3.0, -1.0),
+    vec2<f32>(-1.0,  3.0)
   );
-  var output: VertexOutput;
-  output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  output.fragUV = (pos[vertexIndex] + vec2<f32>(1.0, 1.0)) * 0.5;
-  return output;
+  return vec4<f32>(pos[vertexIndex], 0.0, 1.0);
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-  let uv = in.fragUV;
-  let v = uv * 2.0 - vec2<f32>(1.0, 1.0);
+fn fs_main() -> @location(0) vec4<f32> {
+  let uv = vec2<f32>(0.5); // fixed UV for demo purposes
+  let v = uv * 2.0 - vec2<f32>(1.0);
   let result = snap45(v);
   let color = vec3<f32>(result.x * 0.5 + 0.5, result.y * 0.5 + 0.5, 0.0);
   return vec4<f32>(color, 1.0);
 }
 `;
 
-      // Set the default WGSL code in each editor.
-      document.getElementById("branchEditor").value = defaultBranchWGSL;
-      document.getElementById("branchlessEditor").value = defaultBranchlessWGSL;
-
-      // --- Canvas and Context Setup ---
-      const branchCanvas = document.getElementById("branchCanvas");
-      const branchlessCanvas = document.getElementById("branchlessCanvas");
-
-      // Helper to initialize a canvas with a WebGPU context.
-      function initCanvas(canvas) {
-        const context = canvas.getContext("webgpu");
-        // Ensure the drawing buffer is set from CSS size.
-        canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
-        canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
-        const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({
-          device: device,
-          format: presentationFormat,
-          alphaMode: "premultiplied"
-        });
-        return { context, presentationFormat };
+    document.addEventListener("DOMContentLoaded", async () => {
+      // Check WebGPU support.
+      if (!navigator.gpu) {
+        alert("WebGPU is not supported in this browser.");
+        return;
       }
-      const branchSetup = initCanvas(branchCanvas);
-      const branchlessSetup = initCanvas(branchlessCanvas);
-
-      // --- Uniform Buffer and Bind Groups ---
-      // Uniforms: 4 floats (vec2 resolution, time, threshold) = 16 bytes.
-      const uniformBufferSize = 4 * 4;
-      function createUniformBuffer() {
-        return device.createBuffer({
-          size: uniformBufferSize,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-      }
-      const branchUniformBuffer = createUniformBuffer();
-      const branchlessUniformBuffer = createUniformBuffer();
-
-      // Bind group layout: one uniform buffer at binding 0.
-      const bindGroupLayout = device.createBindGroupLayout({
-        entries: [{
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" }
-        }]
-      });
+      
+      // Initialize WebGPU adapter and device.
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
+      console.log("WebGPU device acquired.");
+      
+      // Initialize Ace editors.
+      const branchEditor = initEditor("branchEditor", defaultBranchWGSL);
+      const branchlessEditor = initEditor("branchlessEditor", defaultBranchlessWGSL);
+      
+      // Canvas setup.
+      const [branchCanvas, branchlessCanvas] = initializeCanvases(
+        ["branchCanvas", "branchlessCanvas"], device
+      );
+      
+      // Uniform buffers (using 5 floats × 4 bytes = 20 bytes).
+      const uniformBufferSize = 20;
+      const branchUniformBuffer = createUniformBuffer(device, uniformBufferSize);
+      const branchlessUniformBuffer = createUniformBuffer(device, uniformBufferSize);
+      
+      // Pipeline setup.
+      const bindGroupLayout = createBindGroupLayout(device);
       const pipelineLayout = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayout]
       });
-      // Helper to create a bind group.
-      function createBindGroup(uniformBuffer) {
+      
+      let [branchPipeline, branchlessPipeline] = await Promise.all([
+        createPipeline(device, pipelineLayout, defaultBranchWGSL, branchCanvas.format),
+        createPipeline(device, pipelineLayout, defaultBranchlessWGSL, branchlessCanvas.format)
+      ]);
+      
+      // Threshold controls.
+      const thresholdSlider = document.getElementById("thresholdSlider");
+      let currentThreshold = parseFloat(thresholdSlider.value);
+      thresholdSlider.addEventListener("input", updateThreshold);
+      
+      // Start render loops.
+      startRenderLoop(device, branchCanvas, branchPipeline, branchUniformBuffer, "branchMetrics");
+      startRenderLoop(device, branchlessCanvas, branchlessPipeline, branchlessUniformBuffer, "branchlessMetrics");
+      
+      // Compile button handlers.
+      document.getElementById("compileBranch").addEventListener("click", () => 
+        recompileShader(device, branchEditor, branchCanvas, pipelineLayout, "branch")
+      );
+      document.getElementById("compileBranchless").addEventListener("click", () => 
+        recompileShader(device, branchlessEditor, branchlessCanvas, pipelineLayout, "branchless")
+      );
+      
+      // --- Helper Functions ---
+      
+      // Initialize Ace Editor with default code.
+      function initEditor(elementId, defaultCode) {
+        const editor = ace.edit(elementId);
+        editor.setTheme("ace/theme/monokai");
+        editor.session.setMode("ace/mode/glsl");
+        editor.setValue(defaultCode, -1);
+        return editor;
+      }
+      
+      // Set up canvases and configure their WebGPU contexts.
+      function initializeCanvases(ids, device) {
+        return ids.map(id => {
+          const canvas = document.getElementById(id);
+          canvas.width = canvas.clientWidth * devicePixelRatio;
+          canvas.height = canvas.clientHeight * devicePixelRatio;
+          const context = canvas.getContext("webgpu");
+          const format = navigator.gpu.getPreferredCanvasFormat();
+          context.configure({ device, format });
+          return { canvas, context, format };
+        });
+      }
+      
+      // Create a render pipeline from WGSL code.
+      async function createPipeline(device, layout, code, format) {
+        try {
+          return device.createRenderPipeline({
+            layout,
+            vertex: {
+              module: device.createShaderModule({ code }),
+              entryPoint: "vs_main"
+            },
+            fragment: {
+              module: device.createShaderModule({ code }),
+              entryPoint: "fs_main",
+              targets: [{ format }]
+            },
+            primitive: { topology: "triangle-list" }
+          });
+        } catch (error) {
+          console.error("Pipeline creation failed:", error);
+          return null;
+        }
+      }
+      
+      // Render loop: update uniform, record commands, and schedule next frame.
+      function startRenderLoop(device, canvasInfo, pipeline, uniformBuffer, metricsId) {
+        const frameTimes = [];
+        let lastTime = performance.now();
+        
+        function frame() {
+          const now = performance.now();
+          const delta = now - lastTime;
+          lastTime = now;
+          updateMetrics(metricsId, delta, frameTimes);
+          updateUniformBuffer(device, uniformBuffer, canvasInfo.canvas, now);
+          
+          const commandEncoder = device.createCommandEncoder();
+          const renderPass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+              view: canvasInfo.context.getCurrentTexture().createView(),
+              clearValue: [0.1, 0.1, 0.1, 1],
+              loadOp: "clear",
+              storeOp: "store"
+            }]
+          });
+          
+          renderPass.setPipeline(pipeline);
+          renderPass.setBindGroup(0, createBindGroup(device, bindGroupLayout, uniformBuffer));
+          renderPass.draw(3);
+          renderPass.end();
+          
+          device.queue.submit([commandEncoder.finish()]);
+          requestAnimationFrame(frame);
+        }
+        
+        requestAnimationFrame(frame);
+      }
+      
+      // Update the threshold value from the slider.
+      function updateThreshold(e) {
+        currentThreshold = parseFloat(e.target.value);
+        document.getElementById("thresholdValue").textContent = currentThreshold.toFixed(2);
+      }
+      
+      // Update frame timing metrics.
+      function updateMetrics(metricsId, delta, frameTimes) {
+        frameTimes.push(delta);
+        if (frameTimes.length > 100) frameTimes.shift();
+        const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+        const min = Math.min(...frameTimes);
+        const max = Math.max(...frameTimes);
+        document.getElementById(metricsId).textContent =
+          `Frame Time (ms) – Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`;
+      }
+      
+      // Update the uniform buffer with current resolution, time, and threshold.
+      function updateUniformBuffer(device, uniformBuffer, canvas, now) {
+        const data = new Float32Array([
+          canvas.width,
+          canvas.height,
+          now / 1000.0,
+          currentThreshold,
+          0.0  // Padding field (_pad)
+        ]);
+        device.queue.writeBuffer(uniformBuffer, 0, data.buffer, data.byteOffset, data.byteLength);
+      }
+      
+      // Create a uniform buffer.
+      function createUniformBuffer(device, size) {
+        return device.createBuffer({
+          size: size,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+      }
+      
+      // Create a bind group for the uniform buffer.
+      function createBindGroup(device, bindGroupLayout, uniformBuffer) {
         return device.createBindGroup({
           layout: bindGroupLayout,
           entries: [{
@@ -283,165 +406,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
           }]
         });
       }
-      let branchBindGroup = createBindGroup(branchUniformBuffer);
-      let branchlessBindGroup = createBindGroup(branchlessUniformBuffer);
-
-      // --- Pipeline Creation ---
-      // Given full WGSL code (vertex + fragment), create a render pipeline.
-      function createPipeline(shaderCode, presentationFormat) {
-        const shaderModule = device.createShaderModule({ code: shaderCode });
-        try {
-          const pipeline = device.createRenderPipeline({
-            layout: pipelineLayout,
-            vertex: {
-              module: shaderModule,
-              entryPoint: "vs_main",
-            },
-            fragment: {
-              module: shaderModule,
-              entryPoint: "fs_main",
-              targets: [{ format: presentationFormat }]
-            },
-            primitive: { topology: "triangle-list" }
-          });
-          return pipeline;
-        } catch (e) {
-          console.error("Pipeline creation error:", e);
-          return null;
-        }
-      }
-      // Create the initial pipelines from the default WGSL code.
-      let branchPipeline = createPipeline(defaultBranchWGSL, branchSetup.presentationFormat);
-      let branchlessPipeline = createPipeline(defaultBranchlessWGSL, branchlessSetup.presentationFormat);
-
-      // --- Shared Parameter: Threshold ---
-      const thresholdSlider = document.getElementById("thresholdSlider");
-      let currentThreshold = parseFloat(thresholdSlider.value);
-      thresholdSlider.addEventListener("input", (e) => {
-        currentThreshold = parseFloat(e.target.value);
-        document.getElementById("thresholdValue").textContent = currentThreshold.toFixed(2);
-      });
-
-      // --- Performance Metrics ---
-      const branchFrameTimes = [];
-      const branchlessFrameTimes = [];
-      const branchMetricsEl = document.getElementById("branchMetrics");
-      const branchlessMetricsEl = document.getElementById("branchlessMetrics");
-      function updateMetrics(el, frameTimes) {
-        if (frameTimes.length === 0) return;
-        const sum = frameTimes.reduce((a, b) => a + b, 0);
-        const avg = sum / frameTimes.length;
-        const min = Math.min(...frameTimes);
-        const max = Math.max(...frameTimes);
-        el.textContent = `Frame Time (ms) – Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`;
-      }
-
-      // --- Render Loop for Branching Shader ---
-      let branchLastTime = performance.now();
-      function renderBranch() {
-        const now = performance.now();
-        const delta = now - branchLastTime;
-        branchLastTime = now;
-        branchFrameTimes.push(delta);
-        if (branchFrameTimes.length > 100) branchFrameTimes.shift();
-        updateMetrics(branchMetricsEl, branchFrameTimes);
-        // Update uniform buffer: [width, height, time, threshold]
-        const uniformData = new Float32Array([
-          branchCanvas.width,
-          branchCanvas.height,
-          (now % 100000) / 1000.0,
-          currentThreshold
-        ]);
-        device.queue.writeBuffer(branchUniformBuffer, 0, uniformData.buffer);
-        // Begin rendering.
-        const commandEncoder = device.createCommandEncoder();
-        const textureView = branchSetup.context.getCurrentTexture().createView();
-        const renderPass = commandEncoder.beginRenderPass({
-          colorAttachments: [{
-            view: textureView,
-            loadOp: 'clear',
-            storeOp: 'store',
-            clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }
+      
+      // Create a bind group layout.
+      function createBindGroupLayout(device) {
+        return device.createBindGroupLayout({
+          entries: [{
+            binding: 0,
+            visibility: GPUShaderStage.FRAGMENT,
+            buffer: { type: "uniform" }
           }]
         });
-        renderPass.setPipeline(branchPipeline);
-        renderPass.setBindGroup(0, branchBindGroup);
-        renderPass.draw(3, 1, 0, 0);
-        renderPass.end();
-        device.queue.submit([commandEncoder.finish()]);
-        requestAnimationFrame(renderBranch);
       }
-
-      // --- Render Loop for Branchless Shader ---
-      let branchlessLastTime = performance.now();
-      function renderBranchless() {
-        const now = performance.now();
-        const delta = now - branchlessLastTime;
-        branchlessLastTime = now;
-        branchlessFrameTimes.push(delta);
-        if (branchlessFrameTimes.length > 100) branchlessFrameTimes.shift();
-        updateMetrics(branchlessMetricsEl, branchlessFrameTimes);
-        // Update uniform buffer.
-        const uniformData = new Float32Array([
-          branchlessCanvas.width,
-          branchlessCanvas.height,
-          (now % 100000) / 1000.0,
-          currentThreshold
-        ]);
-        device.queue.writeBuffer(branchlessUniformBuffer, 0, uniformData.buffer);
-        // Render.
-        const commandEncoder = device.createCommandEncoder();
-        const textureView = branchlessSetup.context.getCurrentTexture().createView();
-        const renderPass = commandEncoder.beginRenderPass({
-          colorAttachments: [{
-            view: textureView,
-            loadOp: 'clear',
-            storeOp: 'store',
-            clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }
-          }]
-        });
-        renderPass.setPipeline(branchlessPipeline);
-        renderPass.setBindGroup(0, branchlessBindGroup);
-        renderPass.draw(3, 1, 0, 0);
-        renderPass.end();
-        device.queue.submit([commandEncoder.finish()]);
-        requestAnimationFrame(renderBranchless);
+      
+      // Recompile shader from editor code and update the appropriate pipeline.
+      async function recompileShader(device, editor, canvasInfo, pipelineLayout, type) {
+        const code = editor.getValue();
+        const newPipeline = await createPipeline(device, pipelineLayout, code, canvasInfo.format);
+        if (newPipeline) {
+          if (type === "branch") {
+            branchPipeline = newPipeline;
+            console.log("Branching shader recompiled successfully.");
+          } else {
+            branchlessPipeline = newPipeline;
+            console.log("Branchless shader recompiled successfully.");
+          }
+        } else {
+          alert("Failed to compile shader. Check console for errors.");
+        }
       }
-
-      // Start both render loops.
-      renderBranch();
-      renderBranchless();
-
-      // --- Recompile on Demand ---
-      document.getElementById("compileBranch").addEventListener("click", () => {
-        const code = document.getElementById("branchEditor").value;
-        const newPipeline = createPipeline(code, branchSetup.presentationFormat);
-        if (newPipeline) {
-          branchPipeline = newPipeline;
-          console.log("Branching shader recompiled successfully.");
-        } else {
-          alert("Failed to compile branching shader. Check the console for errors.");
-        }
-      });
-      document.getElementById("compileBranchless").addEventListener("click", () => {
-        const code = document.getElementById("branchlessEditor").value;
-        const newPipeline = createPipeline(code, branchlessSetup.presentationFormat);
-        if (newPipeline) {
-          branchlessPipeline = newPipeline;
-          console.log("Branchless shader recompiled successfully.");
-        } else {
-          alert("Failed to compile branchless shader. Check the console for errors.");
-        }
-      });
-
-      // --- Handle Window Resize ---
-      window.addEventListener("resize", () => {
-        [branchCanvas, branchlessCanvas].forEach(canvas => {
-          canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
-          canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
-        });
-      });
-    })();
+    });
   </script>
 </body>
 </html>
